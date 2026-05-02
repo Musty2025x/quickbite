@@ -1,0 +1,166 @@
+# ═══════════════════════════════════════════════════════════════
+# QuickBite — Docker Compose (Local Development)
+# ═══════════════════════════════════════════════════════════════
+
+
+services:
+
+  # ── Databases ────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: quickbite_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quickbite
+      POSTGRES_PASSWORD: quickbite123
+      POSTGRES_MULTIPLE_DATABASES: users_db,restaurants_db,orders_db,delivery_db,notifications_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-dbs.sh:/docker-entrypoint-initdb.d/init-dbs.sh
+    ports:
+      - "5432:5432"
+    networks:
+      - quickbite_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quickbite"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── API Gateway ───────────────────────────────────────────────
+  api-gateway:
+    build: ./services/api-gateway
+    container_name: quickbite_gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      USER_SERVICE_URL: http://user-service:3001
+      RESTAURANT_SERVICE_URL: http://restaurant-service:3002
+      ORDER_SERVICE_URL: http://order-service:3003
+      DELIVERY_SERVICE_URL: http://delivery-service:3004
+      NOTIFICATION_SERVICE_URL: http://notification-service:5001
+    depends_on:
+      - user-service
+      - restaurant-service
+    networks:
+      - quickbite_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── User Service ──────────────────────────────────────────────
+  user-service:
+    build: ./services/user-service
+    container_name: quickbite_users
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: users_db
+      DB_USER: quickbite
+      DB_PASSWORD: quickbite123
+      JWT_SECRET: dev-jwt-secret-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - quickbite_net
+
+  # ── Restaurant Service ────────────────────────────────────────
+  restaurant-service:
+    build: ./services/restaurant-service
+    container_name: quickbite_restaurants
+    restart: unless-stopped
+    environment:
+      PORT: 3002
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: restaurants_db
+      DB_USER: quickbite
+      DB_PASSWORD: quickbite123
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - quickbite_net
+
+  # ── Order Service ─────────────────────────────────────────────
+  order-service:
+    build: ./services/order-service
+    container_name: quickbite_orders
+    restart: unless-stopped
+    environment:
+      PORT: 3003
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: orders_db
+      DB_USER: quickbite
+      DB_PASSWORD: quickbite123
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      NOTIFICATION_SERVICE_URL: http://notification-service:5001
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - quickbite_net
+
+  # ── Delivery Service ──────────────────────────────────────────
+  delivery-service:
+    build: ./services/delivery-service
+    container_name: quickbite_delivery
+    restart: unless-stopped
+    environment:
+      PORT: 3004
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: delivery_db
+      DB_USER: quickbite
+      DB_PASSWORD: quickbite123
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - quickbite_net
+
+  # ── Notification Service (Python) ─────────────────────────────
+  notification-service:
+    build: ./services/notification-service
+    container_name: quickbite_notifications
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: notifications_db
+      DB_USER: quickbite
+      DB_PASSWORD: quickbite123
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - quickbite_net
+
+  # ── Frontend ──────────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    container_name: quickbite_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - quickbite_net
+
+networks:
+  quickbite_net:
+    driver: bridge
+
+volumes:
+  postgres_data:

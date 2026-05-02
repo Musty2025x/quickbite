@@ -1,0 +1,144 @@
+# .github/workflows/deploy.yml
+name: QuickBite CI/CD — Build → ECR → EKS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER: quickbite-cluster
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  # ── Detect changed services ────────────────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api-gateway:          ${{ steps.filter.outputs.api-gateway }}
+      user-service:         ${{ steps.filter.outputs.user-service }}
+      restaurant-service:   ${{ steps.filter.outputs.restaurant-service }}
+      order-service:        ${{ steps.filter.outputs.order-service }}
+      delivery-service:     ${{ steps.filter.outputs.delivery-service }}
+      notification-service: ${{ steps.filter.outputs.notification-service }}
+      frontend:             ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            api-gateway:
+              - 'services/api-gateway/**'
+            user-service:
+              - 'services/user-service/**'
+            restaurant-service:
+              - 'services/restaurant-service/**'
+            order-service:
+              - 'services/order-service/**'
+            delivery-service:
+              - 'services/delivery-service/**'
+            notification-service:
+              - 'services/notification-service/**'
+            frontend:
+              - 'frontend/**'
+
+  # ── Build & Push changed services to ECR ──────────────────
+  build:
+    needs: changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        service:
+          - name: api-gateway
+            path: services/api-gateway
+          - name: user-service
+            path: services/user-service
+          - name: restaurant-service
+            path: services/restaurant-service
+          - name: order-service
+            path: services/order-service
+          - name: delivery-service
+            path: services/delivery-service
+          - name: notification-service
+            path: services/notification-service
+          - name: frontend
+            path: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push ${{ matrix.service.name }}
+        run: |
+          IMAGE=$ECR_REGISTRY/quickbite/${{ matrix.service.name }}:${{ github.sha }}
+          LATEST=$ECR_REGISTRY/quickbite/${{ matrix.service.name }}:latest
+
+          docker build -t $IMAGE -t $LATEST ${{ matrix.service.path }}
+          docker push $IMAGE
+          docker push $LATEST
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+  # ── Deploy to EKS ─────────────────────────────────────────
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name $EKS_CLUSTER \
+            --region $AWS_REGION
+
+      - name: Update image tags in manifests
+        run: |
+          TAG=${{ github.sha }}
+          REGISTRY=$ECR_REGISTRY
+          sed -i "s|YOUR_ECR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com|$REGISTRY|g" k8s/services/deployments.yaml
+          for svc in api-gateway user-service restaurant-service order-service delivery-service notification-service frontend; do
+            sed -i "s|$REGISTRY/quickbite/$svc:latest|$REGISTRY/quickbite/$svc:$TAG|g" k8s/services/deployments.yaml
+          done
+
+      - name: Apply K8s manifests
+        run: |
+          kubectl apply -f k8s/base/
+          kubectl apply -f k8s/services/
+          kubectl apply -f k8s/ingress/
+
+      - name: Wait for rollout
+        run: |
+          for dep in api-gateway user-service restaurant-service order-service delivery-service notification-service frontend; do
+            kubectl rollout status deployment/$dep -n quickbite --timeout=300s
+          done
+
+      - name: Verify deployment
+        run: |
+          echo "=== Pod Status ==="
+          kubectl get pods -n quickbite
+          echo "=== Services ==="
+          kubectl get svc -n quickbite
+          echo "=== Ingress ==="
+          kubectl get ingress -n quickbite

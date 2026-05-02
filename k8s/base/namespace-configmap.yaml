@@ -1,0 +1,28 @@
+# k8s/base/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quickbite
+  labels:
+    app: quickbite
+    env: production
+---
+# k8s/base/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quickbite-config
+  namespace: quickbite
+data:
+  NODE_ENV: "production"
+  DB_PORT: "5432"
+  USER_DB_NAME: "users_db"
+  RESTAURANT_DB_NAME: "restaurants_db"
+  ORDER_DB_NAME: "orders_db"
+  DELIVERY_DB_NAME: "delivery_db"
+  NOTIFICATION_DB_NAME: "notifications_db"
+  USER_SERVICE_URL: "http://user-service:3001"
+  RESTAURANT_SERVICE_URL: "http://restaurant-service:3002"
+  ORDER_SERVICE_URL: "http://order-service:3003"
+  DELIVERY_SERVICE_URL: "http://delivery-service:3004"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:5001"
