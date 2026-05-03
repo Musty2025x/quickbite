@@ -1,0 +1,14 @@
+tfvars
+*.tfvars
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.log
+*.tfplan
+*.tfplan.out
+*.tfvars.json
+*.tfvars.yaml
+*.tfvars.yml
+*.tfvars.tfvars
+*.tfvars.tfvars.json
